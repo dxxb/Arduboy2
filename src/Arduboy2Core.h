@@ -466,6 +466,7 @@ class Arduboy2Core
      *
      * LEFT_BUTTON, RIGHT_BUTTON, UP_BUTTON, DOWN_BUTTON, A_BUTTON, B_BUTTON
      */
+    uint8_t static capPinChargeDelay(volatile uint8_t *port, volatile uint8_t *ddr, volatile uint8_t *pin, const uint8_t bitmask);
     uint8_t static buttonsState();
 
     /** \brief

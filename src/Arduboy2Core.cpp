@@ -115,14 +115,15 @@ void Arduboy2Core::bootPins()
 #ifdef ARDUBOY_10
 
   // Port B INPUT_PULLUP or HIGH
-  PORTB |= _BV(RED_LED_BIT) | _BV(GREEN_LED_BIT) | _BV(BLUE_LED_BIT) |
-           _BV(B_BUTTON_BIT);
-  // Port B INPUT or LOW (none)
+  PORTB |= _BV(RED_LED_BIT) | _BV(GREEN_LED_BIT) | _BV(BLUE_LED_BIT);
+  // Port B INPUT or LOW
+  PORTB &= ~(_BV(B_BUTTON_BIT));
   // Port B inputs
-  DDRB &= ~(_BV(B_BUTTON_BIT) | _BV(SPI_MISO_BIT));
+  DDRB &= ~(_BV(SPI_MISO_BIT));
   // Port B outputs
   DDRB |= _BV(RED_LED_BIT) | _BV(GREEN_LED_BIT) | _BV(BLUE_LED_BIT) |
-          _BV(SPI_MOSI_BIT) | _BV(SPI_SCK_BIT) | _BV(SPI_SS_BIT);
+          _BV(SPI_MOSI_BIT) | _BV(SPI_SCK_BIT) | _BV(SPI_SS_BIT) |
+          _BV(B_BUTTON_BIT);
 
   // Port C
   // Speaker: Not set here. Controlled by audio class
@@ -135,62 +136,26 @@ void Arduboy2Core::bootPins()
   // Port D outputs
   DDRD |= _BV(RST_BIT) | _BV(CS_BIT) | _BV(DC_BIT);
 
-  // Port E INPUT_PULLUP or HIGH
-  PORTE |= _BV(A_BUTTON_BIT);
-  // Port E INPUT or LOW (none)
-  // Port E inputs
-  DDRE &= ~(_BV(A_BUTTON_BIT));
-  // Port E outputs (none)
+  // Port E INPUT_PULLUP or HIGH (none)
+  // Port E INPUT or LOW
+  PORTE &= ~(_BV(A_BUTTON_BIT));
+  // Port E inputs (none)
+  // Port E outputs
+  DDRE |= _BV(A_BUTTON_BIT);
 
-  // Port F INPUT_PULLUP or HIGH
-  PORTF |= _BV(LEFT_BUTTON_BIT) | _BV(RIGHT_BUTTON_BIT) |
-           _BV(UP_BUTTON_BIT) | _BV(DOWN_BUTTON_BIT);
+  // Port F INPUT_PULLUP or HIGH (none)
   // Port F INPUT or LOW
-  PORTF &= ~(_BV(RAND_SEED_IN_BIT));
+  PORTF &= ~(_BV(RAND_SEED_IN_BIT) | _BV(LEFT_BUTTON_BIT) | _BV(RIGHT_BUTTON_BIT) |
+           _BV(UP_BUTTON_BIT) | _BV(DOWN_BUTTON_BIT));
   // Port F inputs
-  DDRF &= ~(_BV(LEFT_BUTTON_BIT) | _BV(RIGHT_BUTTON_BIT) |
-            _BV(UP_BUTTON_BIT) | _BV(DOWN_BUTTON_BIT) |
-            _BV(RAND_SEED_IN_BIT));
+  DDRF &= ~(_BV(RAND_SEED_IN_BIT));
   // Port F outputs (none)
+  DDRF |= _BV(LEFT_BUTTON_BIT) | _BV(RIGHT_BUTTON_BIT) |
+           _BV(UP_BUTTON_BIT) | _BV(DOWN_BUTTON_BIT);
 
 #elif defined(AB_DEVKIT)
 
-  // Port B INPUT_PULLUP or HIGH
-  PORTB |= _BV(LEFT_BUTTON_BIT) | _BV(UP_BUTTON_BIT) | _BV(DOWN_BUTTON_BIT) |
-           _BV(BLUE_LED_BIT);
-  // Port B INPUT or LOW (none)
-  // Port B inputs
-  DDRB &= ~(_BV(LEFT_BUTTON_BIT) | _BV(UP_BUTTON_BIT) | _BV(DOWN_BUTTON_BIT) |
-            _BV(SPI_MISO_BIT));
-  // Port B outputs
-  DDRB |= _BV(SPI_MOSI_BIT) | _BV(SPI_SCK_BIT) | _BV(SPI_SS_BIT) |
-          _BV(BLUE_LED_BIT);
-
-  // Port C INPUT_PULLUP or HIGH
-  PORTC |= _BV(RIGHT_BUTTON_BIT);
-  // Port C INPUT or LOW (none)
-  // Port C inputs
-  DDRC &= ~(_BV(RIGHT_BUTTON_BIT));
-  // Port C outputs (none)
-
-  // Port D INPUT_PULLUP or HIGH
-  PORTD |= _BV(CS_BIT);
-  // Port D INPUT or LOW
-  PORTD &= ~(_BV(RST_BIT));
-  // Port D inputs (none)
-  // Port D outputs
-  DDRD |= _BV(RST_BIT) | _BV(CS_BIT) | _BV(DC_BIT);
-
-  // Port E (none)
-
-  // Port F INPUT_PULLUP or HIGH
-  PORTF |= _BV(A_BUTTON_BIT) | _BV(B_BUTTON_BIT);
-  // Port F INPUT or LOW
-  PORTF &= ~(_BV(RAND_SEED_IN_BIT));
-  // Port F inputs
-  DDRF &= ~(_BV(A_BUTTON_BIT) | _BV(B_BUTTON_BIT) | _BV(RAND_SEED_IN_BIT));
-  // Port F outputs (none)
-  // Speaker: Not set here. Controlled by audio class
+#error "Devkit unsupported"
 
 #endif
 }
@@ -527,29 +492,59 @@ void Arduboy2Core::digitalWriteRGB(uint8_t color, uint8_t val)
 
 /* Buttons */
 
+uint8_t Arduboy2Core::capPinChargeDelay(volatile uint8_t *port, volatile uint8_t *ddr, volatile uint8_t *pin, const uint8_t bitmask)
+{
+  uint8_t cycles = 0;
+  // Make the pin an input with the internal pull-up on
+  *ddr &= ~(bitmask);
+  *port |= bitmask;
+
+  // Count loops before pin changes state 0 -> 1
+  // WARN: !! This loop will never exit if the pin is tied to GND
+  while (!(*pin & bitmask)) {
+    cycles++;
+  }
+
+  // Discharge the pin again by setting it low and output
+  *port &= ~(bitmask);
+  *ddr |= bitmask;
+  return cycles;
+}
+
 uint8_t Arduboy2Core::buttonsState()
 {
-  uint8_t buttons;
+  uint8_t buttons = 0;
+
+#define BTN_ON_CAP_DELAY_THRESHOLD (3)
 
 #ifdef ARDUBOY_10
-  // up, right, left, down
-  buttons = ((~PINF) &
-              (_BV(UP_BUTTON_BIT) | _BV(RIGHT_BUTTON_BIT) |
-               _BV(LEFT_BUTTON_BIT) | _BV(DOWN_BUTTON_BIT)));
-  // A
-  if (bitRead(A_BUTTON_PORTIN, A_BUTTON_BIT) == 0) { buttons |= A_BUTTON; }
-  // B
-  if (bitRead(B_BUTTON_PORTIN, B_BUTTON_BIT) == 0) { buttons |= B_BUTTON; }
+
+  uint8_t oldSREG = SREG;
+  cli();                // suspend interrupts
+
+  if (capPinChargeDelay(&PORTF, &DDRF, &PINF, _BV(UP_BUTTON_BIT)) >= BTN_ON_CAP_DELAY_THRESHOLD) {
+    buttons |= _BV(UP_BUTTON_BIT);
+  }
+  if (capPinChargeDelay(&PORTF, &DDRF, &PINF, _BV(RIGHT_BUTTON_BIT)) >= BTN_ON_CAP_DELAY_THRESHOLD) {
+    buttons |= _BV(RIGHT_BUTTON_BIT);
+  }
+  if (capPinChargeDelay(&PORTF, &DDRF, &PINF, _BV(LEFT_BUTTON_BIT)) >= BTN_ON_CAP_DELAY_THRESHOLD) {
+    buttons |= _BV(LEFT_BUTTON_BIT);
+  }
+  if (capPinChargeDelay(&PORTF, &DDRF, &PINF, _BV(DOWN_BUTTON_BIT)) >= BTN_ON_CAP_DELAY_THRESHOLD) {
+    buttons |= _BV(DOWN_BUTTON_BIT);
+  }
+  if (capPinChargeDelay(&PORTB, &DDRB, &PINB, _BV(B_BUTTON_BIT)) >= BTN_ON_CAP_DELAY_THRESHOLD) {
+    buttons |= B_BUTTON;
+  }
+  if (capPinChargeDelay(&PORTE, &DDRE, &PINE, _BV(A_BUTTON_BIT)) >= BTN_ON_CAP_DELAY_THRESHOLD) {
+    buttons |= A_BUTTON;
+  }
+
+  SREG = oldSREG;       // restore interrupts
+
 #elif defined(AB_DEVKIT)
-  // down, left, up
-  buttons = ((~PINB) &
-              (_BV(DOWN_BUTTON_BIT) | _BV(LEFT_BUTTON_BIT) | _BV(UP_BUTTON_BIT)));
-  // right
-  if (bitRead(RIGHT_BUTTON_PORTIN, RIGHT_BUTTON_BIT) == 0) { buttons |= RIGHT_BUTTON; }
-  // A
-  if (bitRead(A_BUTTON_PORTIN, A_BUTTON_BIT) == 0) { buttons |= A_BUTTON; }
-  // B
-  if (bitRead(B_BUTTON_PORTIN, B_BUTTON_BIT) == 0) { buttons |= B_BUTTON; }
+  #error "Devkit is not supported"
 #endif
 
   return buttons;
